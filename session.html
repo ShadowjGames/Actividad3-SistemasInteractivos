@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Juan Esteban Calle Palmett - Mi sesión</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Mi sesión</h1>
+      <div class="navlinks">
+        <a class="link" href="index.html">Login</a>
+        <a class="link" href="users.html">Usuarios</a>
+      </div>
+    </div>
+
+    <div class="card" id="sessionCard">
+      <h2>Estado de sesión</h2>
+      <div id="sessionInfo">Cargando...</div>
+      <div style="margin-top:12px;">
+        <button id="logoutBtn">Logout</button>
+        <button id="refreshTokenBtn">Re-auth (prompt)</button>
+      </div>
+    </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Juan Esteban Calle Palmett - Usuarios</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+
+<script>
+  // Prellenar el usuario autenticado
+  document.addEventListener('DOMContentLoaded', () => {
+    const user = localStorage.getItem('username');
+    if (user) document.getElementById('scoreUserInput').value = user;
+  });
+</script>
+
+  <div class="container">
+    <div class="header">
+      <h1>Usuarios y Leaderboard</h1>
+      <div class="navlinks">
+        <a class="link" href="index.html">Login</a>
+        <a class="link" href="register.html">Registro</a>
+        <a class="link" href="session.html">Mi sesión</a>
+      </div>
+    </div>
+
+    
+
+    <div class="card">
+      <button id="refreshUsersBtn" class="secondary">Actualizar lista</button>
+      <table class="table">
+        <thead><tr><th>#</th><th>Usuario</th><th>Puntaje</th></tr></thead>
+        <tbody id="leaderboardTableBody"></tbody>
+      </table>
+    </div>
+
+      <form id="changeScoreForm">
+  <label for="scoreUserInput">Usuario:</label>
+  <input type="text" id="scoreUserInput" required readonly>
+  <label for="newScoreInput">Nuevo Score:</label>
+  <input type="number" id="newScoreInput" required>
+  <button id="changeScoreBtn">Actualizar Score</button>
+</form>
+
+  <script src="main.js"></script>
+</body>
+</html>
