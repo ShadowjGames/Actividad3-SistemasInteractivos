@@ -1,5 +1,6 @@
 // main.js - manejador central
-const apiUrl = 'https://sid-restapi.onrender.com';
+// Ajusta apiUrl al endpoint real (ej: http://127.0.0.1:1234 o https://sid-restapi.onrender.com)
+const apiUrl = 'http://127.0.0.1:1234';
 
 // Debug panel (múltiples páginas pueden tener este id)
 function debugWrite(obj) {
@@ -19,22 +20,21 @@ function getLocalScore(user){ return (readLocalScores()||{})[user]; }
 /* ---------- tiny dom helper ---------- */
 const el = id => document.getElementById(id);
 
-/* ---------- token extractor robusto ---------- */
+/* ---------- token extractor robusto (pero priorizamos token en campos conocidos) ---------- */
 function findTokenAnywhere(obj){
   if (!obj || typeof obj !== 'object') return null;
-  // check known fields first
-  if (obj.token) return obj.token;
-  if (obj.jwt) return obj.jwt;
-  if (obj.accessToken) return obj.accessToken;
-  // deep search
+  // known fields first
+  if (typeof obj.token === 'string' && obj.token.length>10) return obj.token;
+  if (typeof obj.jwt === 'string' && obj.jwt.length>10) return obj.jwt;
+  if (typeof obj.accessToken === 'string' && obj.accessToken.length>10) return obj.accessToken;
+  // deep search fallback
   const visited = new Set();
   function dfs(node){
     if (!node || typeof node !== 'object' || visited.has(node)) return null;
     visited.add(node);
     for (const k of Object.keys(node)){
       const v = node[k];
-      if (typeof v === 'string' && v.length>10 && /eyJ|[A-Za-z0-9\-\._~\+\/]+=*/.test(v)) return v;
-      if (k.toLowerCase().includes('token') && typeof v === 'string') return v;
+      if (typeof v === 'string' && v.length>10) return v;
       if (typeof v === 'object'){
         const r = dfs(v);
         if (r) return r;
@@ -45,7 +45,7 @@ function findTokenAnywhere(obj){
   return dfs(obj);
 }
 
-/* ---------- fetch wrapper: includes credentials to support cookie-based sessions ---------- */
+/* ---------- fetch wrapper ---------- */
 async function callApi(path, opts = {}) {
   const { method = 'GET', body = undefined, token = null, credentials = 'omit' } = opts;
   const headers = {};
@@ -55,9 +55,7 @@ async function callApi(path, opts = {}) {
   const fetchOpts = {
     method,
     headers,
-    // **por defecto usamos 'omit'** para evitar conflicto CORS con Access-Control-Allow-Origin: *
-    // pero permitimos pasar credentials: 'include' si el servidor está configurado correctamente.
-    credentials: credentials
+    credentials: credentials // default 'omit' — usamos tokens por header
   };
   if (body !== undefined) fetchOpts.body = JSON.stringify(body);
 
@@ -80,8 +78,9 @@ async function registerUser(username, password) {
   if (!username || !password) { alert('Completa username y password'); return; }
   const initialScore = Math.floor(Math.random()*1001);
 
-  // Enviar registro (incluyendo score para intentar que servidor lo guarde)
-const reg = await callApi('/api/usuarios', { method: 'POST', body: { username, password, score: initialScore }, credentials: 'omit' });
+  // Enviar registro. NOTA: enviamos la forma que el servidor acepta: data: { score }
+  const payload = { username, password, data: { score: initialScore } };
+  const reg = await callApi('/api/usuarios', { method: 'POST', body: payload, credentials: 'omit' });
 
   if (!reg.ok && reg.status !== 0) {
     const msg = reg.data?.msg || reg.data?.message || reg.rawText || `status:${reg.status}`;
@@ -92,8 +91,8 @@ const reg = await callApi('/api/usuarios', { method: 'POST', body: { username, p
   // Guardar local para fallback
   setLocalScore(username, initialScore);
 
-  // Intentar extraer token directo desde respuesta del registro
-  let token = findTokenAnywhere(reg.data);
+  // Intentar extraer token directo desde respuesta del registro (priorizamos token en toplevel)
+  let token = reg.data?.token || findTokenAnywhere(reg.data);
   if (token) {
     localStorage.setItem('token', token);
     localStorage.setItem('username', username);
@@ -108,26 +107,25 @@ const reg = await callApi('/api/usuarios', { method: 'POST', body: { username, p
   // Si no hay token JSON, intentar login automático (POST /api/auth/login).
   const loginRes = await login(username, password, { silent: true });
   if (loginRes && loginRes.ok) {
-    // Si login obtuvo token se guarda en login()
-    // sincronizar score al server si disponemos de token
     const tokenNow = localStorage.getItem('token');
     if (tokenNow) {
       await syncScoreToServer(username, initialScore, { password });
       alert('Registro OK. Login automático exitoso y score sincronizado.');
+      location.href = 'session.html';
+      return;
     } else {
-      // Si no hay token tras login automático, puede que el servidor use cookies: haremos una GET con credentials include para comprobar
+      // Si no hay token tras login automático, intentar GET por path (posible cookie-based session)
       const probe = await callApi(`/api/usuarios/${encodeURIComponent(username)}`, { method: 'GET' });
       if (probe.ok) {
-        // servidor permitió la consulta (posiblemente por cookie), tomar score del server o fallback local
-        const serverScore = probe.data?.usuario?.score ?? probe.data?.score ?? null;
-        if (serverScore !== null) {
+        const serverScore = probe.data?.usuario?.data?.score ?? probe.data?.usuario?.score ?? probe.data?.score ?? null;
+        if (serverScore !== null && serverScore !== undefined) {
           localStorage.setItem('score', serverScore);
           setLocalScore(username, serverScore);
         } else {
           localStorage.setItem('score', String(initialScore));
         }
         localStorage.setItem('username', username);
-        alert('Registro ok. Se detectó sesión por cookie (sin token JSON).');
+        alert('Registro ok. Se detectó sesión (posible cookie).');
         location.href = 'session.html';
         return;
       } else {
@@ -159,26 +157,29 @@ async function login(username, password, opts = {}) {
     return { ok: false, status: res.status, data: res.data };
   }
 
-  const token = findTokenAnywhere(res.data) || res.data?.token || res.data?.jwt || res.data?.accessToken || null;
+  // Priorizar token en campos conocidos
+  const token = res.data?.token || res.data?.jwt || res.data?.accessToken || findTokenAnywhere(res.data) || null;
   if (token) {
     localStorage.setItem('token', token);
     localStorage.setItem('username', username);
   } else {
-    localStorage.setItem('username', username); // server pudo usar cookies
+    localStorage.setItem('username', username); // servidor pudo usar cookies
   }
 
-  // intentar obtener score desde response o desde /api/usuarios
+  // Obtener score desde response o desde GET profile (server devuelve { usuario: ... })
   let score = null;
-  if (res.data?.usuario) score = res.data.usuario.score ?? res.data.usuario.points ?? res.data.usuario.puntaje;
+  if (res.data?.usuario) {
+    score = res.data.usuario.data?.score ?? res.data.usuario.score ?? null;
+  }
   if (res.data?.score !== undefined) score = res.data.score;
   if (score !== null && score !== undefined) {
     localStorage.setItem('score', String(score));
     setLocalScore(username, score);
   } else {
-    // intentar GET profile para ver si server devuelve score
+    // intentar GET profile por path
     const prof = await callApi(`/api/usuarios/${encodeURIComponent(username)}`, { method: 'GET', token: localStorage.getItem('token') });
     if (prof.ok) {
-      const s2 = prof.data?.usuario?.score ?? prof.data?.score ?? null;
+      const s2 = prof.data?.usuario?.data?.score ?? prof.data?.usuario?.score ?? prof.data?.score ?? null;
       if (s2 !== null && s2 !== undefined) {
         localStorage.setItem('score', String(s2));
         setLocalScore(username, s2);
@@ -207,7 +208,7 @@ async function syncScoreToServer(username, score, opts = {}) {
     }
   }
 
-  // Solo enviar el score
+  // Enviar la forma que el servidor espera: { username, data: { score } }
   const token = localStorage.getItem('token') || null;
   const payload = { username, data: { score } };
   let res = await callApi('/api/usuarios', { method: 'PATCH', body: payload, token, credentials: 'omit' });
@@ -239,7 +240,6 @@ async function fetchUsersFromServer() {
   const token = localStorage.getItem('token') || null;
   const res = await callApi('/api/usuarios', { method: 'GET', token });
   if (res.status === 401) {
-    // inform user
     alert('No autorizado para listar usuarios (401). El token pudo expirar o no existir. Haz login.');
     localStorage.removeItem('token');
     return { ok: false, status: 401, data: [] };
@@ -248,11 +248,10 @@ async function fetchUsersFromServer() {
     console.warn('GET /api/usuarios failed', res);
     return { ok: false, status: res.status, data: [] };
   }
-  // normalize array
+  // El servidor devuelve array para lista
   let arr = [];
   if (Array.isArray(res.data)) arr = res.data;
   else if (res.data?.usuarios) arr = res.data.usuarios;
-  else if (res.data?.users) arr = res.data.users;
   else {
     const maybe = Object.values(res.data || {}).find(v=>Array.isArray(v));
     if (maybe) arr = maybe;
@@ -280,7 +279,7 @@ async function loadUsersListAndRender() {
 function renderMergedUsers(serverUsersArray, localScoresObj) {
   const merged = (serverUsersArray||[]).map(u=>{
     const username = u.username || u.name || u.uid || u._id || 'unknown';
-    const serverScore = u.score ?? u.points ?? u.puntaje ?? null;
+    const serverScore = u.data?.score ?? u.score ?? u.points ?? u.puntaje ?? null;
     const localScore = localScoresObj[username];
     const score = (serverScore !== null && serverScore !== undefined) ? Number(serverScore) : (localScore !== undefined ? Number(localScore) : 0);
     return { username, score };
@@ -300,7 +299,6 @@ function renderMergedUsers(serverUsersArray, localScoresObj) {
       tbody.appendChild(tr);
     });
   } else {
-    // maybe ul on another page
     const ul = el('usersList');
     if (ul) {
       ul.innerHTML = '';
@@ -315,7 +313,6 @@ function renderMergedUsers(serverUsersArray, localScoresObj) {
 
 /* ---------- SetUIForUserLoggedIn (session page UI) ---------- */
 function SetUIForUserLoggedIn(username) {
-  // if session.html present, fill info
   const sessionInfo = el('sessionInfo');
   if (sessionInfo) {
     const token = localStorage.getItem('token') || '— (no token JSON; puede usarse cookie HttpOnly)';
@@ -334,22 +331,17 @@ function escapeHtml(s){ if (s===null||s===undefined) return ''; return String(s)
 
 /* ---------- event bindings on DOMContentLoaded ---------- */
 document.addEventListener('DOMContentLoaded', () => {
-  // login form
   if (el('loginButton')) el('loginButton').addEventListener('click', (ev)=>{ ev.preventDefault(); login(el('usernameInput').value, el('passwordInput').value); });
-  // register
   if (el('registerButton')) el('registerButton').addEventListener('click', (ev)=>{ ev.preventDefault(); registerUser(el('newUsername').value, el('newPassword').value); });
-  // refresh users
   if (el('refreshUsersBtn')) el('refreshUsersBtn').addEventListener('click', ()=>loadUsersListAndRender());
-  // session page controls
   if (el('logoutBtn')) el('logoutBtn').addEventListener('click', ()=>{ localStorage.removeItem('token'); localStorage.removeItem('username'); localStorage.removeItem('score'); location.href='index.html'; });
   if (el('refreshTokenBtn')) el('refreshTokenBtn').addEventListener('click', async ()=> {
-    // prompt quick relogin (for testing)
     const u = prompt('Usuario para re-login:');
     const p = prompt('Contraseña:');
     if (u && p) { await login(u,p); location.reload(); }
   });
-  
-    if (el('changeScoreBtn')) el('changeScoreBtn').addEventListener('click', async (ev) => {
+
+  if (el('changeScoreBtn')) el('changeScoreBtn').addEventListener('click', async (ev) => {
     ev.preventDefault();
     const username = el('scoreUserInput').value;
     const score = Number(el('newScoreInput').value);
@@ -366,10 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // If visiting users.html -> load table
   if (el('leaderboardTableBody')) loadUsersListAndRender();
-
-  // If visiting session.html -> display session info
   const storedUser = localStorage.getItem('username');
   if (storedUser) SetUIForUserLoggedIn(storedUser);
 });
